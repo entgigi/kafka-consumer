@@ -9,7 +9,6 @@ import (
 	"time"
 
 	kafka "github.com/segmentio/kafka-go"
-	"github.com/segmentio/kafka-go/sasl/scram"
 )
 
 const (
@@ -24,29 +23,23 @@ type config struct {
 }
 
 func main() {
-	log.Println("starting server ...")
+	log.Println("starting server ... 1")
 
 	config := getConfigFromEnv()
 
-	_ = &kafka.Writer{
-		Addr:     kafka.TCP(config.KafkaAddress),
-		Topic:    config.Topic,
-		Balancer: &kafka.LeastBytes{},
-	}
-
 	msgCh := make(chan []byte)
+	pod := os.Getenv("POD_NAME")
 	go readLoop(strings.Split(config.KafkaAddress, ","), config.Topic, func(m kafka.Message) {
-		// go func() {
-		log.Printf("Sleep 10 seconds to simulate delay...")
+		log.Printf("[%s] Sleep 10 seconds to simulate delay...", pod)
 		time.Sleep(10 * time.Second)
-		msgCh <- m.Value
-		log.Printf("Wake up...")
-		// }()
+		msg := fmt.Sprintf("message offset:'%d' key:'%s' value:'%s'", m.Offset, string(m.Key), string(m.Value))
+		msgCh <- []byte(msg)
+		//log.Printf("Wake up...")
 	})
 	for {
 		select {
 		case msg := <-msgCh:
-			fmt.Printf("msg: %s\n", string(msg))
+			log.Printf("[%s] %s\n", pod, string(msg))
 		}
 	}
 }
@@ -65,33 +58,22 @@ func getConfigFromEnv() config {
 }
 
 func readLoop(brokers []string, topic string, consumer func(m kafka.Message)) {
-	mechanism, err := scram.Mechanism(scram.SHA512, "username", "password")
-	if err != nil {
-		panic(err)
-	}
-
-	dialer := &kafka.Dialer{
-		Timeout:       10 * time.Second,
-		DualStack:     true,
-		SASLMechanism: mechanism,
-	}
-
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: brokers,
 		GroupID: "consumer-group-id",
 		Topic:   topic,
-		Dialer:  dialer,
 	})
 
+	ctx := context.Background()
 	for {
-		m, err := r.ReadMessage(context.Background())
+		m, err := r.ReadMessage(ctx)
 
 		if err != nil {
-			fmt.Println(err)
+			log.Printf("%s", err)
 			break
 		}
-		// TODO: process message
-		fmt.Printf("message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
+
+		// process message
 		consumer(m)
 	}
 
