@@ -32,7 +32,7 @@ func main() {
 	go readLoop(strings.Split(config.KafkaAddress, ","), config.Topic, func(m kafka.Message) {
 		log.Printf("[%s] Sleep 10 seconds to simulate delay...", pod)
 		time.Sleep(10 * time.Second)
-		msg := fmt.Sprintf("message offset:'%d' key:'%s' value:'%s'", m.Offset, string(m.Key), string(m.Value))
+		msg := fmt.Sprintf("message partition:'%d', offset:'%d' key:'%s' value:'%s'", m.Partition, m.Offset, string(m.Key), string(m.Value))
 		msgCh <- []byte(msg)
 		//log.Printf("Wake up...")
 	})
@@ -58,23 +58,37 @@ func getConfigFromEnv() config {
 }
 
 func readLoop(brokers []string, topic string, consumer func(m kafka.Message)) {
+	pod := os.Getenv("POD_NAME")
+	log.Printf("[%s] start reading loop...", pod)
 	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers: brokers,
-		GroupID: "consumer-group-id",
-		Topic:   topic,
+		Brokers:        brokers,
+		GroupID:        "consumer-group-id",
+		Topic:          topic,
+		GroupBalancers: []kafka.GroupBalancer{kafka.RoundRobinGroupBalancer{}},
+		MinBytes:       10e3, // 10KB
+		MaxBytes:       10e6, // 10MB
 	})
 
-	ctx := context.Background()
+	log.Printf("[%s] started reading loop...", pod)
+
+	lag, err := r.ReadLag(context.Background())
+	log.Printf("[%s] read err:'%s' read lag:'%d'", pod, err, lag)
+
 	for {
-		m, err := r.ReadMessage(ctx)
+		log.Printf("[%s] reading message...", pod)
+		m, err := r.ReadMessage(context.Background())
+		log.Printf("[%s] read message...", pod)
 
 		if err != nil {
-			log.Printf("%s", err)
+			log.Printf("[%s] error reading:%s", pod, err)
 			break
 		}
 
 		// process message
 		consumer(m)
+
+		lag, err := r.ReadLag(context.Background())
+		log.Printf("[%s] read err:'%s' read lag:'%d'", pod, err, lag)
 	}
 
 	if err := r.Close(); err != nil {
